@@ -12,6 +12,7 @@ clang++ \
     $LIB_SRC \
     $EX_SRC \
     -o $EX_OUT \
-    -I/Users/struc/dev/concepts/mem/src
+    -I/Users/struc/dev/concepts/mem/src \
+    -fno-strict-aliasing
 
 # $EX_OUT

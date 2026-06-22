@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <new>
 
 struct ArenaHeader
 {
@@ -10,6 +11,7 @@ struct ArenaHeader
     size_t used;
 };
 
+// TODO: Should this be uint8_t?
 template<typename ArenaT>
 void *_arena_base = nullptr;
 
@@ -45,10 +47,13 @@ template<typename ArenaT>
 void arena_init(void *mem)
 {
     _arena_base<ArenaT> = mem;
-    _arena_header<ArenaT> = reinterpret_cast<ArenaHeader *>(mem);
+    _arena_header<ArenaT> = new (mem) ArenaHeader;
+
     assert(sizeof(ArenaHeader) + sizeof(ArenaT) <= _arena_header<ArenaT>->cap);
-    
+
     _arena_header<ArenaT>->used = sizeof(ArenaHeader);
+
+    // push the root struct of the arena on to the arena
     arena_push<ArenaT, ArenaT>();
 }
 

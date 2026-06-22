@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <sys/mman.h>
 
 void *reserve_mem(size_t size)
@@ -13,7 +14,7 @@ void *reserve_mem(size_t size)
         perror("mmap failed");
         exit(1);
     }
-    *((size_t *)mem) = size;
+    memcpy(mem, &size, sizeof(size_t));
     return mem;
 }
 
