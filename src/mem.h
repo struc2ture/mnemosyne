@@ -10,10 +10,10 @@ struct ArenaHeader
     size_t cap;
     size_t used;
 };
+static_assert(sizeof(ArenaHeader) == 16);
 
-// TODO: Should this be uint8_t?
 template<typename ArenaT>
-void *_arena_base = nullptr;
+uint8_t *_arena_base = nullptr;
 
 template<typename ArenaT>
 ArenaHeader *_arena_header = nullptr;
@@ -26,11 +26,10 @@ struct RPtr
     ValueT *get_ptr()
     {
         assert(offset > 0 && "Dereferencing null offset relative pointer.");
-        uint8_t *base = (uint8_t *)_arena_base<ArenaT>;
-        return reinterpret_cast<ValueT *>(base + offset);
+        return reinterpret_cast<ValueT *>(_arena_base<ArenaT> + offset);
     }
 
-    const ValueT *get_ptr() const { return reinterpret_cast<const ValueT *>(get_ptr()); }
+    const ValueT *get_ptr() const { return get_ptr(); }
     ValueT &operator*() { return get_ptr(); }
     const ValueT &operator*() const { return get_ptr(); }
     ValueT *operator->() { return get_ptr(); }
@@ -40,28 +39,55 @@ struct RPtr
     explicit operator bool() { return offset > 0; }
 };
 
-template<typename ArenaT, typename ValueT>
-RPtr<ArenaT, ValueT> arena_push(size_t count = 1);
+template<typename ArenaT>
+void *arena_push_size(size_t size, size_t align = 1);
 
 template<typename ArenaT>
-void arena_init(void *mem)
+ArenaT &arena_get_root_struct();
+
+template<typename ArenaT>
+ArenaT &arena_attach_owning(void *mem, bool &is_initialized)
 {
-    _arena_base<ArenaT> = mem;
-    _arena_header<ArenaT> = new (mem) ArenaHeader;
+    _arena_base<ArenaT> = reinterpret_cast<uint8_t *>(mem);
+    _arena_header<ArenaT> = reinterpret_cast<ArenaHeader *>(mem);
 
-    assert(sizeof(ArenaHeader) + sizeof(ArenaT) <= _arena_header<ArenaT>->cap);
+    if (_arena_header<ArenaT>->used == 0)
+    {
+        // Not already initialized. Initialize the arena and the root struct
+        _arena_header<ArenaT>->used = sizeof(ArenaHeader);
+        // Push root struct
+        arena_push_size<ArenaT>(sizeof(ArenaT), alignof(ArenaT));
+        is_initialized = false;
+    }
+    else
+    {
+        is_initialized = true;
+    }
 
-    _arena_header<ArenaT>->used = sizeof(ArenaHeader);
-
-    // push the root struct of the arena on to the arena
-    arena_push<ArenaT, ArenaT>();
+    return arena_get_root_struct<ArenaT>();
 }
 
 template<typename ArenaT>
-void arena_attach(void *mem)
+bool arena_attach_non_owning(void *mem)
 {
-    _arena_base<ArenaT> = mem;
+    bool attached;
+
+    _arena_base<ArenaT> = reinterpret_cast<uint8_t *>(mem);
     _arena_header<ArenaT> = reinterpret_cast<ArenaHeader *>(mem);
+
+    if (_arena_header<ArenaT>->used == 0)
+    {
+        // Not already initialized. Cannot attach memory
+        _arena_base<ArenaT> = nullptr;
+        _arena_header<ArenaT> = nullptr;
+        attached = false;
+    }
+    else
+    {
+        attached = true;
+    }
+
+    return attached;
 }
 
 template<typename ArenaT>
@@ -71,16 +97,16 @@ void arena_detach()
     _arena_header<ArenaT> = nullptr;
 }
 
-inline size_t _arena_get_aligned_pos(size_t pos, size_t align)
+constexpr size_t _align_up(size_t pos, size_t align)
 {
     size_t aligned = (pos + align - 1) & ~(align - 1);
     return aligned;
 }
 
 template<typename ArenaT, typename ValueT>
-RPtr<ArenaT, ValueT> arena_push(size_t count)
+RPtr<ArenaT, ValueT> _arena_push(size_t count)
 {
-    size_t start = _arena_get_aligned_pos(_arena_header<ArenaT>->used, alignof(ValueT));
+    size_t start = _align_up(_arena_header<ArenaT>->used, alignof(ValueT));
     size_t end = start + count * sizeof(ValueT);
     assert (end <=_arena_header<ArenaT>->cap);
     _arena_header<ArenaT>->used = end;
@@ -89,9 +115,9 @@ RPtr<ArenaT, ValueT> arena_push(size_t count)
 }
 
 template<typename ArenaT>
-void *arena_push_size(size_t size, size_t align = 1)
+void *arena_push_size(size_t size, size_t align)
 {
-    size_t start = _arena_get_aligned_pos(_arena_header<ArenaT>->used, align);
+    size_t start = _align_up(_arena_header<ArenaT>->used, align);
     size_t end = start + size;
     assert (end <=_arena_header<ArenaT>->cap);
     _arena_header<ArenaT>->used = end;
@@ -99,10 +125,10 @@ void *arena_push_size(size_t size, size_t align = 1)
 }
 
 template<typename ArenaT>
-RPtr<ArenaT, ArenaT> arena_get_root_struct()
+ArenaT &arena_get_root_struct()
 {
-    RPtr<ArenaT, ArenaT> ptr{ sizeof(ArenaHeader) };
-    return ptr;
+    ArenaT *root_ptr = reinterpret_cast<ArenaT *>(_arena_base<ArenaT> + sizeof(ArenaHeader));
+    return *root_ptr;
 }
 
 // ---
@@ -114,15 +140,14 @@ struct BlockHeader
     bool is_free;
     int magic;
 };
+static_assert(sizeof(BlockHeader) % alignof(std::max_align_t) == 0);
 
 template<typename ArenaT>
 BlockHeader *first_block = nullptr;
 
-template<typename ArenaT, typename ValueT>
-BlockHeader *find_free_block(BlockHeader **last)
+template<typename ArenaT>
+BlockHeader *find_free_block(BlockHeader **last, size_t size)
 {
-    size_t size = sizeof(ValueT);
-
     BlockHeader *current = first_block<ArenaT>;
     while (current && !(current->is_free && current->size >= size))
     {
@@ -132,14 +157,12 @@ BlockHeader *find_free_block(BlockHeader **last)
     return current;
 }
 
-template<typename ArenaT, typename ValueT>
-BlockHeader *request_space(BlockHeader *last)
+template<typename ArenaT>
+BlockHeader *request_space(BlockHeader *last, size_t size)
 {
-    size_t size = sizeof(ValueT);
+    void *ptr = arena_push_size<ArenaT>(sizeof(BlockHeader) + size, alignof(std::max_align_t));
 
-    void *ptr = arena_push_size<ArenaT>(sizeof(BlockHeader) + size, alignof(ValueT));
-
-    BlockHeader *block = new (ptr) BlockHeader;
+    BlockHeader *block = reinterpret_cast<BlockHeader *>(ptr);
     block->size = size;
     block->next = nullptr;
     block->is_free = false;
@@ -154,22 +177,24 @@ BlockHeader *request_space(BlockHeader *last)
 }
 
 template<typename ArenaT, typename ValueT>
-RPtr<ArenaT, ValueT> arena_alloc()
+RPtr<ArenaT, ValueT> arena_alloc(size_t count = 1)
 {
     BlockHeader *block;
 
+    size_t size = count * sizeof(ValueT);
+
     if (!first_block<ArenaT>)
     {
-        block = request_space<ValueT>(nullptr);
+        block = request_space<ArenaT>(nullptr, size);
         first_block<ArenaT> = block;
     }
     else
     {
         BlockHeader *last = first_block<ArenaT>;
-        block = find_free_block<ArenaT, ValueT>(&last);
+        block = find_free_block<ArenaT>(&last, size);
         if (!block)
         {
-            block = request_space<ArenaT, ValueT>(last);
+            block = request_space<ArenaT>(last, size);
         }
         else
         {
@@ -181,6 +206,14 @@ RPtr<ArenaT, ValueT> arena_alloc()
     size_t relative_offset = (uint8_t *)block - (uint8_t *)_arena_base<ArenaT> + sizeof(BlockHeader);
     RPtr<ArenaT, ValueT> r_ptr{ relative_offset };
     return r_ptr;
+}
+
+template<typename ArenaT, typename ValueT>
+RPtr<ArenaT, ValueT> arena_alloc_aligned(size_t count = 1)
+{
+    (void)count;
+    // TODO Implement alloc that can be aligned for types that need > max_align_t alignment
+    assert(false && "Aligned alloc is not implemented");
 }
 
 inline BlockHeader *get_block_ptr(void *ptr)
