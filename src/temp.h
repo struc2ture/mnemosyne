@@ -103,7 +103,7 @@ inline void free(void *ptr)
     }
 
     BlockHeader *block = get_block_ptr(ptr);
-    assert(block->is_free);
+    assert(!block->is_free);
     assert(block->magic == 0x77777777 || block->magic == 0x12345678);
     block->is_free = true;
     block->magic = 0x55555555;
