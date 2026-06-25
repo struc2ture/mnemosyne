@@ -12,4 +12,4 @@ Everything is templated on ArenaT, so there can be multiple arena/memory block c
 
 ## Example
 
-An example of basic usage can be found [here](examples/some_numbers.cpp)
+[An example of basic usage](examples/d_alloc_reattach.cpp)
