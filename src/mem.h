@@ -1,9 +1,26 @@
+// TODO: Splitting blocks
+// TODO: Coalescing blocks
+// TODO: A separate free list
+// TODO: realloc and calloc
+
+// Further improvements:
+// alligned_alloc for alignments > max_align_t (for SIMD, etc.); keeping track of alignment on block reuse
+//      Or: making the regular alloc always alignment-aware based on templated type
+// Allocation hierarchy by size (small, large) with different ways of block bookkeeping for different sizes
+//      E.g. for small allocations, round up to a size-class -> no O(n) list traversal;
+//      for large allocations, pages, etc.
+// Reserve and commit memory by pages. Release memory back to the OS.
+// Thread-safety for alloc/free operations from different threads using the same arena
+// Accounting for strict aliasing rules, using placement new and std::launder, etc.
+// Safe containers w/ templates and bound-checking: fixed_array, vector - so it can be built without -fno-strict-aliasing
+// Safe counted strings on arena
+// (Some) Address Sanitzation: Some slow way of checking any memory access into an arena at runtime. Compile out with a flag.
+
 #pragma once
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <new>
 
 struct ArenaHeader
 {
