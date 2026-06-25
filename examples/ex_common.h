@@ -34,6 +34,9 @@ inline std::string get_magic_string(BlockHeader *block)
         case 0x12345678:
             magic_string = "FRESH";
             break;
+        case 0x44444444:
+            magic_string = "SPLIT";
+            break;
         case 0x55555555:
             magic_string = "FREE";
             break;

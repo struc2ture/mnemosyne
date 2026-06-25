@@ -1,7 +1,13 @@
 // TODO: Splitting blocks
 // TODO: Coalescing blocks
-// TODO: A separate free list
-// TODO: realloc and calloc
+// TODO: There's a problem now that even though the start of each block is aligned,
+//       its size doesn't represent the size up to the next block,
+//       but the size that the allocation itself needs.
+//       On each allocation, the size of the block, should be made a multiple of max_align_t.
+
+// Maybe TODO:
+// A separate free list
+// realloc and calloc
 
 // Further improvements:
 // alligned_alloc for alignments > max_align_t (for SIMD, etc.); keeping track of alignment on block reuse
@@ -169,7 +175,7 @@ struct BlockHeader
     size_t size;
     size_t prev;
     bool is_free;
-    int magic; // 0x12345678 - freshly allocated block; 0x55555555 - freed block; 0x77777777 - freed and reused block
+    int magic; // 0x12345678 - freshly allocated block; 0x44444444 - split block; 0x55555555 - freed block; 0x77777777 - freed and reused block
 };
 static_assert(sizeof(BlockHeader) % alignof(max_align_t) == 0);
 
@@ -217,7 +223,7 @@ BlockHeader *_arena_alloc_request_space(size_t size)
     void *ptr = arena_push_size<ArenaT>(sizeof(BlockHeader) + size, alignof(std::max_align_t));
 
     BlockHeader *block = reinterpret_cast<BlockHeader *>(ptr);
-    block->size = size;
+    block->size = _arena_align_up(size, alignof(max_align_t)); // TODO: test this with allocations, the size of which are not a multiple of max align.
     block->is_free = false;
     block->magic = 0x12345678;
 
@@ -234,8 +240,23 @@ inline void *_arena_alloc_get_usable_ptr(BlockHeader *block_ptr)
     return reinterpret_cast<void *>((uint8_t *)block_ptr + sizeof(BlockHeader));
 }
 
-inline void _arena_alloc_reuse_block(BlockHeader *block)
+inline void _arena_alloc_reuse_block(BlockHeader *block, size_t new_size)
 {
+    constexpr size_t split_block_min_size = sizeof(BlockHeader) + alignof(max_align_t);
+    new_size = _arena_align_up(new_size, alignof(max_align_t));
+    if (block->size - new_size >= split_block_min_size)
+    {
+        size_t current_block_start = (size_t)block;
+        size_t current_block_end = current_block_start + sizeof(BlockHeader) + block->size;
+        size_t split_block_start =  current_block_start + sizeof(BlockHeader) + new_size;
+
+        BlockHeader *split_block = (BlockHeader *)split_block_start;
+        split_block->size = current_block_end - split_block_start - sizeof(BlockHeader);
+        split_block->is_free = true;
+        split_block->magic = 0x44444444;
+
+        block->size = new_size;
+    }
     block->is_free = false;
     block->magic = 0x77777777;
 }
@@ -257,7 +278,7 @@ RPtr<ArenaT, ValueT> arena_alloc(size_t count = 1)
     {
         block = _arena_alloc_find_free_block<ArenaT>(size);
         if (!block) block = _arena_alloc_request_space<ArenaT>(size);
-        else _arena_alloc_reuse_block(block);
+        else _arena_alloc_reuse_block(block, size);
     }
 
     size_t relative_offset = (uint8_t *)_arena_alloc_get_usable_ptr(block) - _arena_base<ArenaT>;
