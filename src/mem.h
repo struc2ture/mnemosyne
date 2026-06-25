@@ -12,11 +12,11 @@ struct ArenaHeader
 };
 static_assert(sizeof(ArenaHeader) == 16);
 
-template<typename ArenaT>
-uint8_t *_arena_base = nullptr;
+template<typename ArenaT> uint8_t *_arena_base = nullptr;
+template<typename ArenaT> uint8_t *arena_get_base() { return _arena_base<ArenaT>; }
 
-template<typename ArenaT>
-ArenaHeader *_arena_header = nullptr;
+template<typename ArenaT> ArenaHeader *_arena_header = nullptr;
+template<typename ArenaT> ArenaHeader *arena_get_header() { return _arena_header<ArenaT>; }
 
 template<typename ArenaT, typename ValueT>
 struct RPtr
@@ -138,17 +138,17 @@ struct BlockHeader
     size_t size;
     BlockHeader *next;
     bool is_free;
-    int magic;
+    int magic; // 0x12345678 - freshly allocated block; 0x55555555 - freed block; 0x77777777 - freed and reused block
 };
 static_assert(sizeof(BlockHeader) % alignof(std::max_align_t) == 0);
 
-template<typename ArenaT>
-BlockHeader *first_block = nullptr;
+template<typename ArenaT> BlockHeader *_first_block = nullptr;
+template<typename ArenaT> BlockHeader *arena_get_first_block() { return _first_block<ArenaT>; };
 
 template<typename ArenaT>
 BlockHeader *find_free_block(BlockHeader **last, size_t size)
 {
-    BlockHeader *current = first_block<ArenaT>;
+    BlockHeader *current = _first_block<ArenaT>;
     while (current && !(current->is_free && current->size >= size))
     {
         *last = current;
@@ -183,14 +183,14 @@ RPtr<ArenaT, ValueT> arena_alloc(size_t count = 1)
 
     size_t size = count * sizeof(ValueT);
 
-    if (!first_block<ArenaT>)
+    if (!_first_block<ArenaT>)
     {
         block = request_space<ArenaT>(nullptr, size);
-        first_block<ArenaT> = block;
+        _first_block<ArenaT> = block;
     }
     else
     {
-        BlockHeader *last = first_block<ArenaT>;
+        BlockHeader *last = _first_block<ArenaT>;
         block = find_free_block<ArenaT>(&last, size);
         if (!block)
         {
