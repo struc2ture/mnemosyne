@@ -1,10 +1,3 @@
-// TODO: Splitting blocks
-// TODO: Coalescing blocks
-// TODO: There's a problem now that even though the start of each block is aligned,
-//       its size doesn't represent the size up to the next block,
-//       but the size that the allocation itself needs.
-//       On each allocation, the size of the block, should be made a multiple of max_align_t.
-
 // Maybe TODO:
 // A separate free list
 // realloc and calloc
@@ -21,6 +14,7 @@
 // Safe containers w/ templates and bound-checking: fixed_array, vector - so it can be built without -fno-strict-aliasing
 // Safe counted strings on arena
 // (Some) Address Sanitzation: Some slow way of checking any memory access into an arena at runtime. Compile out with a flag.
+// (Micro improvement) If last block is free but is not big enough, expand its size.
 
 #pragma once
 
@@ -173,74 +167,95 @@ ArenaT &arena_get_root_struct()
 struct BlockHeader
 {
     size_t size;
-    size_t prev;
+    size_t prev_size;
     bool is_free;
-    int magic; // 0x12345678 - freshly allocated block; 0x44444444 - split block; 0x55555555 - freed block; 0x77777777 - freed and reused block
+    int magic; // 0x12345678 - freshly allocated block; 0x44444444 - split block; 0x55555555 - freed block; 0x66666666 - coalesced; 0x77777777 - freed and reused block
 };
 static_assert(sizeof(BlockHeader) % alignof(max_align_t) == 0);
 
-template<typename ArenaT> BlockHeader *_arena_alloc_get_first_block()
+template<typename ArenaT>
+BlockHeader *_arena_alloc_get_first_block()
 {
     BlockHeader *block = nullptr;
     if (_arena_header<ArenaT>->first_block_offset < _arena_header<ArenaT>->used)
     {
-        block = reinterpret_cast<BlockHeader *>(_arena_base<ArenaT> + _arena_header<ArenaT>->first_block_offset);
+        block = (BlockHeader *)(_arena_base<ArenaT> + _arena_header<ArenaT>->first_block_offset);
     }
     return block;
-};
+}
 
-template<typename ArenaT> BlockHeader *_arena_alloc_get_next_block(BlockHeader *curr)
+template<typename ArenaT>
+BlockHeader *_arena_alloc_get_next_block(BlockHeader *curr)
 {
     BlockHeader *next = nullptr;
     size_t curr_offset = (uint8_t *)curr - _arena_base<ArenaT>;
     size_t next_offset = curr_offset + sizeof(BlockHeader) + curr->size;
     if (next_offset < _arena_header<ArenaT>->used)
     {
-        next = reinterpret_cast<BlockHeader *>(_arena_base<ArenaT> + next_offset);
+        next = (BlockHeader *)(_arena_base<ArenaT> + next_offset);
     }
     return next;
+}
+
+inline
+BlockHeader *_arena_alloc_get_prev_block(BlockHeader *curr)
+{
+    BlockHeader *prev = nullptr;
+    if (curr->prev_size > 0)
+    {
+        size_t curr_addr = (size_t)curr;
+        size_t prev_addr = curr_addr - curr->prev_size - sizeof(BlockHeader);
+        prev = (BlockHeader *)(prev_addr);
+    }
+    return prev;
 };
 
-inline bool _arena_alloc_block_is_free(BlockHeader *block, size_t size)
+inline
+bool _arena_alloc_block_is_free(BlockHeader *block, size_t size)
 {
     return block->is_free && block->size >= size;
 }
 
 template<typename ArenaT>
-BlockHeader *_arena_alloc_find_free_block(size_t size)
+BlockHeader *_arena_alloc_find_free_block(size_t size, BlockHeader **previous)
 {
     BlockHeader *current = _arena_alloc_get_first_block<ArenaT>();
     while (current && !_arena_alloc_block_is_free(current, size))
     {
+        *previous = current;
         current = _arena_alloc_get_next_block<ArenaT>(current);
     }
     return current;
 }
 
 template<typename ArenaT>
-BlockHeader *_arena_alloc_request_space(size_t size)
+BlockHeader *_arena_alloc_request_space(size_t size, BlockHeader *previous)
 {
     void *ptr = arena_push_size<ArenaT>(sizeof(BlockHeader) + size, alignof(std::max_align_t));
 
     BlockHeader *block = reinterpret_cast<BlockHeader *>(ptr);
-    block->size = _arena_align_up(size, alignof(max_align_t)); // TODO: test this with allocations, the size of which are not a multiple of max align.
+    block->size = _arena_align_up(size, alignof(max_align_t));
+    block->prev_size = previous ? previous->size : 0;
     block->is_free = false;
     block->magic = 0x12345678;
 
     return block;
 }
 
-inline BlockHeader *_arena_alloc_get_block_ptr(void *ptr)
+inline
+BlockHeader *_arena_alloc_get_block_ptr(void *ptr)
 {
     return reinterpret_cast<BlockHeader *>((uint8_t *)ptr - sizeof(BlockHeader));
 }
 
-inline void *_arena_alloc_get_usable_ptr(BlockHeader *block_ptr)
+inline
+void *_arena_alloc_get_usable_ptr(BlockHeader *block_ptr)
 {
     return reinterpret_cast<void *>((uint8_t *)block_ptr + sizeof(BlockHeader));
 }
 
-inline void _arena_alloc_reuse_block(BlockHeader *block, size_t new_size)
+inline
+void _arena_alloc_reuse_block(BlockHeader *block, size_t new_size)
 {
     constexpr size_t split_block_min_size = sizeof(BlockHeader) + alignof(max_align_t);
     new_size = _arena_align_up(new_size, alignof(max_align_t));
@@ -250,21 +265,69 @@ inline void _arena_alloc_reuse_block(BlockHeader *block, size_t new_size)
         size_t current_block_end = current_block_start + sizeof(BlockHeader) + block->size;
         size_t split_block_start =  current_block_start + sizeof(BlockHeader) + new_size;
 
+        block->size = new_size;
+
         BlockHeader *split_block = (BlockHeader *)split_block_start;
         split_block->size = current_block_end - split_block_start - sizeof(BlockHeader);
+        split_block->prev_size = block->size;
         split_block->is_free = true;
         split_block->magic = 0x44444444;
 
-        block->size = new_size;
+        BlockHeader *next_block = (BlockHeader *)current_block_end;
+        next_block->prev_size = split_block->size;
     }
     block->is_free = false;
     block->magic = 0x77777777;
 }
 
-inline void _arena_alloc_free_block(BlockHeader *block)
+template <typename ArenaT>
+void _arena_alloc_free_block(BlockHeader *block)
 {
+#ifdef DISABLE_COALESCING
     block->is_free = true;
     block->magic = 0x55555555;
+#else
+    bool have_coalesced = false;
+
+    // Try coalesce with the next block
+    BlockHeader *next_block = _arena_alloc_get_next_block<ArenaT>(block);
+    if (next_block && next_block->is_free)
+    {
+        block->is_free = true;
+        block->size += sizeof(BlockHeader) + next_block->size;
+        block->magic = 0x66666666;
+
+        BlockHeader *new_next_block = _arena_alloc_get_next_block<ArenaT>(block);
+        if (new_next_block)
+        {
+            new_next_block->prev_size = block->size;
+        }
+
+        have_coalesced = true;
+    }
+
+    // Try coalesce with the prev block
+    BlockHeader *prev_block = _arena_alloc_get_prev_block(block);
+    if (prev_block && prev_block->is_free)
+    {
+        prev_block->size += sizeof(BlockHeader) + block->size;
+        prev_block->magic = 0x66666666;
+
+        BlockHeader *new_next_block = _arena_alloc_get_next_block<ArenaT>(prev_block);
+        if (new_next_block)
+        {
+            new_next_block->prev_size = prev_block->size;
+        }
+
+        have_coalesced = true;
+    }
+
+    if (!have_coalesced)
+    {
+        block->is_free = true;
+        block->magic = 0x55555555;
+    }
+#endif
 }
 
 template<typename ArenaT, typename ValueT>
@@ -273,11 +336,12 @@ RPtr<ArenaT, ValueT> arena_alloc(size_t count = 1)
     size_t size = count * sizeof(ValueT);
 
     BlockHeader *block = _arena_alloc_get_first_block<ArenaT>();
-    if (!block) block = _arena_alloc_request_space<ArenaT>(size);
+    if (!block) block = _arena_alloc_request_space<ArenaT>(size, nullptr);
     else
     {
-        block = _arena_alloc_find_free_block<ArenaT>(size);
-        if (!block) block = _arena_alloc_request_space<ArenaT>(size);
+        BlockHeader *last;
+        block = _arena_alloc_find_free_block<ArenaT>(size, &last);
+        if (!block) block = _arena_alloc_request_space<ArenaT>(size, last);
         else _arena_alloc_reuse_block(block, size);
     }
 
@@ -303,5 +367,5 @@ void arena_free(RPtr<ArenaT, ValueT> r_ptr)
     BlockHeader *block = _arena_alloc_get_block_ptr(ptr);
     assert(!block->is_free);
     assert(block->magic = 0x77777777 || block->magic == 0x12345678);
-    _arena_alloc_free_block(block);
+    _arena_alloc_free_block<ArenaT>(block);
 }

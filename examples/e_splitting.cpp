@@ -1,3 +1,5 @@
+#define DISABLE_COALESCING
+
 #include "ex_common.h"
 #include "mem.h"
 #include <cstring>
@@ -7,9 +9,9 @@ struct State
     RPtr<State, int> numbers;
 };
 
-void print_numbers_rel_ptr(State &state, int indent_level = 0)
+void print_numbers_rel_ptr(RPtr<State, int> numbers, int indent_level = 0)
 {
-    indent(indent_level); std::println("state.numbers.offset = {}", state.numbers.offset);
+    indent(indent_level); std::println("numbers.offset = {}", numbers.offset);
 }
 
 int main()
@@ -41,16 +43,19 @@ int main()
     std::println("New allocation: for 8 ints. Should reuse the second block and split it.");
     print_arena_header(1);
     print_alloc_blocks(1);
+    print_numbers_rel_ptr(numbers_2, 1);
 
     RPtr<State, int> numbers_3 = arena_alloc<State, int>(2);
     std::println("New allocation: for 2 ints. Should reuse the first block and not split it, because it's too small.");
     print_arena_header(1);
     print_alloc_blocks(1);
+    print_numbers_rel_ptr(numbers_3, 1);
 
     RPtr<State, int> numbers_4 = arena_alloc<State, int>();
     std::println("New allocation: for 1 int. Should reuse the third block, which was a split block, and not split it, because it's too small.");
     print_arena_header(1);
     print_alloc_blocks(1);
+    print_numbers_rel_ptr(numbers_4, 1);
 
     arena_free(numbers_2);
     arena_free(numbers_3);

@@ -40,6 +40,9 @@ inline std::string get_magic_string(BlockHeader *block)
         case 0x55555555:
             magic_string = "FREE";
             break;
+        case 0x66666666:
+            magic_string = "COALESCED";
+            break;
         case 0x77777777:
             magic_string = "REUSED";
             break;
@@ -62,7 +65,7 @@ inline void print_alloc_block(BlockHeader *block, int i, int indent_level)
 {
     indent(indent_level);     std::println("[{}] block:", i);
     indent(indent_level + 1); std::println("size = {}", block->size);
-    indent(indent_level + 1); std::println("prev = {}", block->prev);
+    indent(indent_level + 1); std::println("prev_size = {}", block->prev_size);
     indent(indent_level + 1); std::println("is_free = {}", block->is_free);
     indent(indent_level + 1); std::println("magic = {}", get_magic_string(block));
     indent(indent_level + 1); std::println("usable offset = {}", get_usable_offset(block));
