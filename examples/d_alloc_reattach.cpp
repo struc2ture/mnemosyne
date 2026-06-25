@@ -37,17 +37,18 @@ int main()
 
     {
         bool is_initialized;
-        State &state = arena_attach_owning<State>(mem, is_initialized); (void)state;
+        State &state = mne_attach_mem_owning<State>(mem, is_initialized); (void)state;
 
         // Only use this so the templated symbols can be used in the debugger
-        uint8_t *arena_base = arena_get_base<State>(); (void)arena_base;
-        ArenaHeader *arena_header = arena_get_header<State>(); (void)arena_header;
-        BlockHeader *first_block = _arena_alloc_get_first_block<State>(); (void)first_block;
+        uint8_t *arena_base = mne_internals::get_arena_base<State>(); (void)arena_base;
+        mne_internals::ArenaHeader *arena_header = mne_internals::get_arena_header<State>(); (void)arena_header;
+        mne_internals::BlockHeader *first_block = mne_internals::alloc_get_first_block<State>(); (void)first_block;
         // ---
 
-        state.numbers = arena_alloc<State, int>(10);
-        arena_free(state.numbers);
-        state.numbers = arena_alloc<State, int>(20);
+
+        state.numbers = mne_alloc<State, int>(10);
+        mne_free(state.numbers);
+        state.numbers = mne_alloc<State, int>(20);
 
         for (int i = 0; i < 20; i++)
         {
@@ -61,7 +62,7 @@ int main()
         print_numbers(state, 20, 1);
     }
 
-    arena_detach<State>();
+    mne_detach_mem<State>();
 
     void *new_mem = reserve_mem(mem_size);
     memcpy(new_mem, mem, mem_size);
@@ -69,10 +70,10 @@ int main()
     std::println("Detached arena. Got a new block of memory at {}. Copied all bytes from {} to {}", new_mem, mem, new_mem);
 
     {
-        bool attached = arena_attach_non_owning<State>(new_mem);
+        bool attached = mne_attach_mem_non_owning<State>(new_mem);
         if (attached)
         {
-            State &state =arena_get_root_struct<State>();
+            State &state =mne_get_root_struct<State>();
 
             std::println("Attached arena to new_mem");
             print_arena_header(1);

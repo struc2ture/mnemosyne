@@ -9,7 +9,7 @@ struct State
 void task_owning(void *mem)
 {
     bool is_initialized;
-    State &state = arena_attach_owning<State>(mem, is_initialized); (void)state;
+    State &state = mne_attach_mem_owning<State>(mem, is_initialized); (void)state;
 
     if (!is_initialized)
     {
@@ -21,14 +21,14 @@ void task_owning(void *mem)
 
 void task_non_owning(void *mem)
 {
-    bool attached = arena_attach_non_owning<State>(mem);
+    bool attached = mne_attach_mem_non_owning<State>(mem);
     if (!attached)
     {
         std::println("Non-owning Task: cannot be attached to uninitialized memory");
     }
     else
     {
-        State &state = arena_get_root_struct<State>(); (void)state;
+        State &state = mne_get_root_struct<State>(); (void)state;
         std::println("Non-owning Task: attached to initialized memory. Executing...");
     }
 }
@@ -42,10 +42,10 @@ int main()
         void *mem = reserve_mem(mem_size);
 
         task_owning(mem);
-        arena_detach<State>();
+        mne_detach_mem<State>();
 
         task_non_owning(mem);
-        arena_detach<State>();
+        mne_detach_mem<State>();
 
         free_mem(mem, mem_size);
 
@@ -59,7 +59,7 @@ int main()
         void *mem = reserve_mem(mem_size);
 
         task_non_owning(mem);
-        arena_detach<State>();
+        mne_detach_mem<State>();
 
         free_mem(mem, mem_size);
 
@@ -73,10 +73,10 @@ int main()
         void *mem = reserve_mem(mem_size);
 
         task_owning(mem);
-        arena_detach<State>();
+        mne_detach_mem<State>();
 
         task_owning(mem);
-        arena_detach<State>();
+        mne_detach_mem<State>();
 
         free_mem(mem, mem_size);
 

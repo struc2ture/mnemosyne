@@ -24,11 +24,11 @@ void print_numbers(State &state)
 void task(void *mem)
 {
     bool is_initialized;
-    State &state = arena_attach_owning<State>(mem, is_initialized); (void)state;
+    State &state = mne_attach_mem_owning<State>(mem, is_initialized); (void)state;
 
     if (!is_initialized)
     {
-        state.some_numbers = arena_alloc<State, int>(number_count);
+        state.some_numbers = mne_alloc<State, int>(number_count);
 
         for (int i = 0; i < number_count; i++)
         {
@@ -59,7 +59,7 @@ int main()
     std::println("Running task with mem at {}", mem);
     task(mem);
 
-    arena_detach<State>();
+    mne_detach_mem<State>();
     void *mem_two = reserve_mem(mem_size);
     memcpy(mem_two, mem, mem_size);
     free_mem(mem, mem_size);

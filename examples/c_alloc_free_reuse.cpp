@@ -18,19 +18,19 @@ int main()
     void *mem = reserve_mem(mem_size);
 
     bool is_initialized;
-    State &state = arena_attach_owning<State>(mem, is_initialized); (void)state;
+    State &state = mne_attach_mem_owning<State>(mem, is_initialized); (void)state;
 
     // Only use this so the templated symbols can be used in the debugger
-    uint8_t *arena_base = arena_get_base<State>(); (void)arena_base;
-    ArenaHeader *arena_header = arena_get_header<State>(); (void)arena_header;
-    BlockHeader *first_block = _arena_alloc_get_first_block<State>(); (void)first_block;
+    uint8_t *arena_base = mne_internals::get_arena_base<State>(); (void)arena_base;
+    mne_internals::ArenaHeader *arena_header = mne_internals::get_arena_header<State>(); (void)arena_header;
+    mne_internals::BlockHeader *first_block = mne_internals::alloc_get_first_block<State>(); (void)first_block;
     // ---
 
     std::println("Fresh arena");
     print_arena_header(1);
     print_alloc_blocks(1);
 
-    state.numbers = arena_alloc<State, int>(10);
+    state.numbers = mne_alloc<State, int>(10);
 
     std::println("Allocated 10 ints");
     print_arena_header(1);
@@ -42,33 +42,33 @@ int main()
         state.numbers[i] = i + 1;
     }
 
-    arena_free(state.numbers);
+    mne_free(state.numbers);
 
     std::println("Freed previously allocated");
     print_arena_header(1);
     print_alloc_blocks(1);
 
-    state.numbers = arena_alloc<State, int>(8);
+    state.numbers = mne_alloc<State, int>(8);
 
     std::println("Allocated 8 ints. Should fit in the existing block");
     print_arena_header(1);
     print_alloc_blocks(1);
     print_numbers_rel_ptr(state, 1);
 
-    arena_free(state.numbers);
+    mne_free(state.numbers);
 
     std::println("Freed previously allocated");
     print_arena_header(1);
     print_alloc_blocks(1);
 
-    state.numbers = arena_alloc<State, int>(20);
+    state.numbers = mne_alloc<State, int>(20);
 
     std::println("Allocated 20 ints. Shouldn't fit in the existing block. Allocate second block.");
     print_arena_header(1);
     print_alloc_blocks(1);
     print_numbers_rel_ptr(state, 1);
 
-    arena_free(state.numbers);
+    mne_free(state.numbers);
 
     std::println("Freed previously allocated");
     print_arena_header(1);
