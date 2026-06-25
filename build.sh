@@ -8,9 +8,9 @@ clang++ \
     -g -std=c++23 \
     -Wall -Wextra \
     $EX_SRC \
-    src/mem_provider.cpp \
+    examples/_ex_common.cpp \
     -o $EX_OUT \
-    -I/Users/struc/dev/concepts/mem/src \
+    -I/Users/struc/dev/concepts/mem/lib \
     -fno-strict-aliasing
 
 # $EX_OUT

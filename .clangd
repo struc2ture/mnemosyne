@@ -3,5 +3,5 @@ CompileFlags:
         "-Wall",
         "-Wextra",
         "-std=c++23",
-        "-I/Users/struc/dev/concepts/mem/src"
+        "-I/Users/struc/dev/concepts/mem/lib"
     ]

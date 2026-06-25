@@ -1,18 +1,25 @@
 #pragma once
 
+#include <cstddef>
+#include <cstring>
 #include <print>
 
-#include "mem.h"
-#include "mem_provider.h"
-#include "util.h"
+#include "mnemosyne.h"
 
-struct State;
+#define KB(value) (  (value) * 1024LL)
+#define MB(value) (KB(value) * 1024LL)
+#define GB(value) (MB(value) * 1024LL)
+
+void *reserve_mem(size_t size);
+void free_mem(void *ptr, size_t size);
 
 inline void indent(int indent_level)
 {
     constexpr int space_count = 2;
     for (int i = 0; i < indent_level * space_count; i++) std::print(" ");
 }
+
+struct State;
 
 inline void print_arena_header(int indent_level = 0)
 {

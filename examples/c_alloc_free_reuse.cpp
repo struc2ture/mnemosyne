@@ -1,4 +1,6 @@
-#include "ex_common.h"
+#include "_ex_common.h"
+
+#include "mnemosyne.h"
 
 struct State
 {

@@ -1,12 +1,8 @@
-// #include <cassert>
-// #include <cstdlib>
-#include <cstring>
 #include <iostream>
-#include <print>
 
-#include "mem.h"
-#include "mem_provider.h"
-#include "util.h"
+#include "_ex_common.h"
+
+#include "mnemosyne.h"
 
 struct State
 {

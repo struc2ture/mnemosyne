@@ -1,8 +1,8 @@
 #define DISABLE_COALESCING
 
-#include "ex_common.h"
-#include "mem.h"
-#include <cstring>
+#include "_ex_common.h"
+
+#include "mnemosyne.h"
 
 struct State
 {
