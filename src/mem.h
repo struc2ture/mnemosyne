@@ -9,8 +9,10 @@ struct ArenaHeader
 {
     size_t cap;
     size_t used;
+    size_t first_block_offset;
+    size_t free_block_offset;
 };
-static_assert(sizeof(ArenaHeader) == 16);
+static_assert(sizeof(ArenaHeader) % alignof(max_align_t) == 0);
 
 template<typename ArenaT> uint8_t *_arena_base = nullptr;
 template<typename ArenaT> uint8_t *arena_get_base() { return _arena_base<ArenaT>; }
@@ -45,6 +47,22 @@ void *arena_push_size(size_t size, size_t align = 1);
 template<typename ArenaT>
 ArenaT &arena_get_root_struct();
 
+constexpr size_t _arena_align_up(size_t pos, size_t align)
+{
+    size_t aligned = (pos + align - 1) & ~(align - 1);
+    return aligned;
+}
+
+template <typename ArenaT>
+size_t _arena_alloc_expected_first_block_offset()
+{
+    size_t arena_header_end = sizeof(ArenaHeader);
+    size_t root_struct_start = _arena_align_up(arena_header_end, alignof(max_align_t));
+    size_t root_struct_end = root_struct_start + sizeof(ArenaT);
+    size_t first_block_start = _arena_align_up(root_struct_end, alignof(max_align_t));
+    return first_block_start;
+}
+
 template<typename ArenaT>
 ArenaT &arena_attach_owning(void *mem, bool &is_initialized)
 {
@@ -55,12 +73,13 @@ ArenaT &arena_attach_owning(void *mem, bool &is_initialized)
     {
         // Not already initialized. Initialize the arena and the root struct
         _arena_header<ArenaT>->used = sizeof(ArenaHeader);
-        // Push root struct
-        arena_push_size<ArenaT>(sizeof(ArenaT), alignof(ArenaT));
+        arena_push_size<ArenaT>(sizeof(ArenaT), alignof(max_align_t)); // Push root struct
+        _arena_header<ArenaT>->first_block_offset = _arena_alloc_expected_first_block_offset<ArenaT>();
         is_initialized = false;
     }
     else
     {
+        assert(_arena_header<ArenaT>->first_block_offset == _arena_alloc_expected_first_block_offset<ArenaT>() && "Root Struct size changed");
         is_initialized = true;
     }
 
@@ -84,6 +103,7 @@ bool arena_attach_non_owning(void *mem)
     }
     else
     {
+        assert(_arena_header<ArenaT>->first_block_offset == _arena_alloc_expected_first_block_offset<ArenaT>() && "Root Struct size changed");
         attached = true;
     }
 
@@ -97,16 +117,10 @@ void arena_detach()
     _arena_header<ArenaT> = nullptr;
 }
 
-constexpr size_t _align_up(size_t pos, size_t align)
-{
-    size_t aligned = (pos + align - 1) & ~(align - 1);
-    return aligned;
-}
-
 template<typename ArenaT, typename ValueT>
 RPtr<ArenaT, ValueT> _arena_push(size_t count)
 {
-    size_t start = _align_up(_arena_header<ArenaT>->used, alignof(ValueT));
+    size_t start = _arena_align_up(_arena_header<ArenaT>->used, alignof(ValueT));
     size_t end = start + count * sizeof(ValueT);
     assert (end <=_arena_header<ArenaT>->cap);
     _arena_header<ArenaT>->used = end;
@@ -117,7 +131,7 @@ RPtr<ArenaT, ValueT> _arena_push(size_t count)
 template<typename ArenaT>
 void *arena_push_size(size_t size, size_t align)
 {
-    size_t start = _align_up(_arena_header<ArenaT>->used, align);
+    size_t start = _arena_align_up(_arena_header<ArenaT>->used, align);
     size_t end = start + size;
     assert (end <=_arena_header<ArenaT>->cap);
     _arena_header<ArenaT>->used = end;
@@ -136,74 +150,100 @@ ArenaT &arena_get_root_struct()
 struct BlockHeader
 {
     size_t size;
-    BlockHeader *next;
+    size_t prev;
     bool is_free;
     int magic; // 0x12345678 - freshly allocated block; 0x55555555 - freed block; 0x77777777 - freed and reused block
 };
-static_assert(sizeof(BlockHeader) % alignof(std::max_align_t) == 0);
+static_assert(sizeof(BlockHeader) % alignof(max_align_t) == 0);
 
-template<typename ArenaT> BlockHeader *_first_block = nullptr;
-template<typename ArenaT> BlockHeader *arena_get_first_block() { return _first_block<ArenaT>; };
+template<typename ArenaT> BlockHeader *_arena_alloc_get_first_block()
+{
+    BlockHeader *block = nullptr;
+    if (_arena_header<ArenaT>->first_block_offset < _arena_header<ArenaT>->used)
+    {
+        block = reinterpret_cast<BlockHeader *>(_arena_base<ArenaT> + _arena_header<ArenaT>->first_block_offset);
+    }
+    return block;
+};
+
+template<typename ArenaT> BlockHeader *_arena_alloc_get_next_block(BlockHeader *curr)
+{
+    BlockHeader *next = nullptr;
+    size_t curr_offset = (uint8_t *)curr - _arena_base<ArenaT>;
+    size_t next_offset = curr_offset + sizeof(BlockHeader) + curr->size;
+    if (next_offset < _arena_header<ArenaT>->used)
+    {
+        next = reinterpret_cast<BlockHeader *>(_arena_base<ArenaT> + next_offset);
+    }
+    return next;
+};
+
+inline bool _arena_alloc_block_is_free(BlockHeader *block, size_t size)
+{
+    return block->is_free && block->size >= size;
+}
 
 template<typename ArenaT>
-BlockHeader *find_free_block(BlockHeader **last, size_t size)
+BlockHeader *_arena_alloc_find_free_block(size_t size)
 {
-    BlockHeader *current = _first_block<ArenaT>;
-    while (current && !(current->is_free && current->size >= size))
+    BlockHeader *current = _arena_alloc_get_first_block<ArenaT>();
+    while (current && !_arena_alloc_block_is_free(current, size))
     {
-        *last = current;
-        current = current->next;
+        current = _arena_alloc_get_next_block<ArenaT>(current);
     }
     return current;
 }
 
 template<typename ArenaT>
-BlockHeader *request_space(BlockHeader *last, size_t size)
+BlockHeader *_arena_alloc_request_space(size_t size)
 {
     void *ptr = arena_push_size<ArenaT>(sizeof(BlockHeader) + size, alignof(std::max_align_t));
 
     BlockHeader *block = reinterpret_cast<BlockHeader *>(ptr);
     block->size = size;
-    block->next = nullptr;
     block->is_free = false;
     block->magic = 0x12345678;
 
-    if (last)
-    {
-        last->next = block;
-    }
-
     return block;
+}
+
+inline BlockHeader *_arena_alloc_get_block_ptr(void *ptr)
+{
+    return reinterpret_cast<BlockHeader *>((uint8_t *)ptr - sizeof(BlockHeader));
+}
+
+inline void *_arena_alloc_get_usable_ptr(BlockHeader *block_ptr)
+{
+    return reinterpret_cast<void *>((uint8_t *)block_ptr + sizeof(BlockHeader));
+}
+
+inline void _arena_alloc_reuse_block(BlockHeader *block)
+{
+    block->is_free = false;
+    block->magic = 0x77777777;
+}
+
+inline void _arena_alloc_free_block(BlockHeader *block)
+{
+    block->is_free = true;
+    block->magic = 0x55555555;
 }
 
 template<typename ArenaT, typename ValueT>
 RPtr<ArenaT, ValueT> arena_alloc(size_t count = 1)
 {
-    BlockHeader *block;
-
     size_t size = count * sizeof(ValueT);
 
-    if (!_first_block<ArenaT>)
-    {
-        block = request_space<ArenaT>(nullptr, size);
-        _first_block<ArenaT> = block;
-    }
+    BlockHeader *block = _arena_alloc_get_first_block<ArenaT>();
+    if (!block) block = _arena_alloc_request_space<ArenaT>(size);
     else
     {
-        BlockHeader *last = _first_block<ArenaT>;
-        block = find_free_block<ArenaT>(&last, size);
-        if (!block)
-        {
-            block = request_space<ArenaT>(last, size);
-        }
-        else
-        {
-            block->is_free = false;
-            block->magic = 0x77777777;
-        }
+        block = _arena_alloc_find_free_block<ArenaT>(size);
+        if (!block) block = _arena_alloc_request_space<ArenaT>(size);
+        else _arena_alloc_reuse_block(block);
     }
 
-    size_t relative_offset = (uint8_t *)block - (uint8_t *)_arena_base<ArenaT> + sizeof(BlockHeader);
+    size_t relative_offset = (uint8_t *)_arena_alloc_get_usable_ptr(block) - _arena_base<ArenaT>;
     RPtr<ArenaT, ValueT> r_ptr{ relative_offset };
     return r_ptr;
 }
@@ -216,20 +256,14 @@ RPtr<ArenaT, ValueT> arena_alloc_aligned(size_t count = 1)
     assert(false && "Aligned alloc is not implemented");
 }
 
-inline BlockHeader *get_block_ptr(void *ptr)
-{
-    return reinterpret_cast<BlockHeader *>((uint8_t *)ptr - sizeof(BlockHeader));
-}
-
 template<typename ArenaT, typename ValueT>
 void arena_free(RPtr<ArenaT, ValueT> r_ptr)
 {
     if (!r_ptr) return;
 
     void *ptr = r_ptr.get_ptr();
-    BlockHeader *block = get_block_ptr(ptr);
+    BlockHeader *block = _arena_alloc_get_block_ptr(ptr);
     assert(!block->is_free);
     assert(block->magic = 0x77777777 || block->magic == 0x12345678);
-    block->is_free = true;
-    block->magic = 0x55555555;
+    _arena_alloc_free_block(block);
 }

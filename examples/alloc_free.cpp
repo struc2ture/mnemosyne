@@ -17,12 +17,13 @@ int main()
     bool is_initialized;
     State &state = arena_attach_owning<State>(mem, is_initialized); (void)state;
 
+    // Only use this so the templated symbols can be used in the debugger
     uint8_t *arena_base = arena_get_base<State>(); (void)arena_base;
     ArenaHeader *arena_header = arena_get_header<State>(); (void)arena_header;
+    BlockHeader *first_block = _arena_alloc_get_first_block<State>(); (void)first_block;
+    // ---
 
     state.numbers = arena_alloc<State, int>(10);
-
-    BlockHeader *first_block = arena_get_first_block<State>(); (void)first_block;
 
     for (int i = 0; i < 10; i++)
     {
